@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 )
 
 const npmRegistry = "https://registry.npmjs.org/"
@@ -126,7 +127,13 @@ func InstallPackage(packageName, version string) {
 }
 
 func InstallDependencies(dependencies map[string]string) {
+	var wg sync.WaitGroup
 	for dependencyName, version := range dependencies {
-		go InstallPackage(dependencyName, version[1:])
+		wg.Add(1)
+		go func(dependencyName, version string) {
+			defer wg.Done()
+			InstallPackage(dependencyName, version[1:])
+		}(dependencyName, version)
 	}
+	wg.Wait()
 }
