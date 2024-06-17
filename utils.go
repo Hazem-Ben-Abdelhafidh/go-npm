@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 )
 
@@ -56,28 +58,33 @@ func ExtractTarGz(gzipStream io.Reader, dest string) error {
 			continue
 		}
 
-		target := filepath.Join(dest, header.Name)
+		// Strip the first directory from the header name
+		parts := strings.SplitN(header.Name, string(filepath.Separator), 2)
+		var target string
+		if len(parts) > 1 {
+			target = filepath.Join(dest, parts[1])
+		} else {
+			target = filepath.Join(dest, parts[0])
+		}
 
 		switch header.Typeflag {
 		case tar.TypeDir:
-			// Create directory
 			if err := os.MkdirAll(target, 0777); err != nil {
-				return fmt.Errorf("os.MkdirAll: %w", err)
+				return fmt.Errorf("os.MkdirAll %s: %w", target, err)
 			}
 		case tar.TypeReg:
-			// Create file
 			if err := os.MkdirAll(filepath.Dir(target), 0777); err != nil {
-				return fmt.Errorf("os.MkdirAll: %w", err)
+				return fmt.Errorf("os.MkdirAll %s: %w", filepath.Dir(target), err)
 			}
 
 			outFile, err := os.Create(target)
 			if err != nil {
-				return fmt.Errorf("os.Create: %w", err)
+				return fmt.Errorf("os.Create %s: %w", target, err)
 			}
 			defer outFile.Close()
 
 			if _, err := io.Copy(outFile, tarReader); err != nil {
-				return fmt.Errorf("io.Copy: %w", err)
+				return fmt.Errorf("io.Copy to %s: %w", target, err)
 			}
 		default:
 			return fmt.Errorf("unsupported type: %v in %s", header.Typeflag, header.Name)
@@ -98,12 +105,9 @@ func InstallPackage(packageName, version string) {
 	decoder := json.NewDecoder(body)
 	err = decoder.Decode(&packageData)
 	if err != nil {
-		fmt.Println("error while unmarshaling response", err)
 		panic("error while unmarshaling response")
 	}
 
-	fmt.Printf("%+v \n", packageData.Versions[packageData.DistTags.Latest].Dist.Tarball)
-	fmt.Printf("%+v \n", packageData.Versions)
 	if version == "" {
 		version = packageData.DistTags.Latest
 
@@ -111,18 +115,17 @@ func InstallPackage(packageName, version string) {
 
 	latestVersion := packageData.Versions[version]
 	response, err = http.Get(latestVersion.Dist.Tarball)
+
 	if err != nil {
 		panic("error while fetching tarball")
 	}
 
 	body = response.Body
 
-	err = ExtractTarGz(body, packageData.Id)
+	err = ExtractTarGz(body, "./node_modules/"+packageData.Id)
 	if err != nil {
-		fmt.Println("error while extracting tarball", err)
 		panic("error while extracting tarball")
 	}
-	fmt.Println(packageData.Versions[version].Dist.Integrity)
 	InstallDependencies(packageData.Versions[version].Dependencies)
 }
 
@@ -132,7 +135,12 @@ func InstallDependencies(dependencies map[string]string) {
 		wg.Add(1)
 		go func(dependencyName, version string) {
 			defer wg.Done()
-			InstallPackage(dependencyName, version[1:])
+			_, err := strconv.Atoi(string(version[0]))
+			if err != nil {
+				InstallPackage(dependencyName, version[1:])
+			} else {
+				InstallPackage(dependencyName, version)
+			}
 		}(dependencyName, version)
 	}
 	wg.Wait()
